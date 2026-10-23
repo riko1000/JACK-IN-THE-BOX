@@ -14,16 +14,23 @@ import com.revrobotics.spark.SparkLowLevel.MotorType;
 import com.revrobotics.spark.config.SparkBaseConfig.IdleMode;
 import com.revrobotics.spark.config.SparkFlexConfig;
 
+import static edu.wpi.first.units.Units.Percent;
+import static edu.wpi.first.units.Units.Second;
+import static edu.wpi.first.units.Units.Seconds;
+
+import edu.wpi.first.wpilibj.AddressableLED;
+import edu.wpi.first.wpilibj.AddressableLEDBuffer;
 import edu.wpi.first.wpilibj.Compressor;
 import edu.wpi.first.wpilibj.DigitalInput;
 import edu.wpi.first.wpilibj.DoubleSolenoid;
 import edu.wpi.first.wpilibj.DoubleSolenoid.Value;
+import edu.wpi.first.wpilibj.LEDPattern;
 import edu.wpi.first.wpilibj.PneumaticsModuleType;
 import edu.wpi.first.wpilibj.TimedRobot;
 import edu.wpi.first.wpilibj.Timer;
-import edu.wpi.first.wpilibj.motorcontrol.Spark;
 import edu.wpi.first.wpilibj.smartdashboard.SendableChooser;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
+import edu.wpi.first.wpilibj.util.Color;
 import edu.wpi.first.wpilibj2.command.button.CommandXboxController;
 
 /**
@@ -43,7 +50,8 @@ public class Robot extends TimedRobot {
   private static final int PISTON_FORWARD_CHANNEL = 0; // PCM channel for one side of the piston
   private static final int PISTON_REVERSE_CHANNEL = 1; // PCM channel for the other side
   private static final int PIR_DIO_PORT = 0;
-  private static final int LED_PWM_PORT = 0;
+  private static final int LED_PWM_PORT = 0;       // roboRIO PWM port the strip's DI wire is plugged into
+  private static final int LED_LENGTH = 60;        // number of LEDs on the strip (CHANGE to match yours)
   private static final int CRANK_CURRENT_LIMIT_AMPS = 40;
 
   // Default timings (seconds). These can be changed live from Elastic.
@@ -86,18 +94,19 @@ public class Robot extends TimedRobot {
   // Last PID gains sent to the SPARK, so we only reconfigure when Elastic values change
   private double m_lastP = Double.NaN, m_lastI, m_lastD, m_lastFF;
 
-  // Blinkin on PWM port 0
-  private final Spark m_leds = new Spark(LED_PWM_PORT);
+  // 12V addressable LED strip (DI / BI / GND / +12V) on a roboRIO PWM port
+  private final AddressableLED m_led = new AddressableLED(LED_PWM_PORT);
+  private final AddressableLEDBuffer m_ledBuffer = new AddressableLEDBuffer(LED_LENGTH);
 
   CommandXboxController controller = new CommandXboxController(0);
 
   // Elastic choosers
   private final SendableChooser<Boolean> m_ledMode = new SendableChooser<>();
-  private final SendableChooser<Double> m_manualPattern = new SendableChooser<>();
-  private final SendableChooser<Double> m_idlePattern = new SendableChooser<>();
-  private final SendableChooser<Double> m_crankingPattern = new SendableChooser<>();
-  private final SendableChooser<Double> m_poppedPattern = new SendableChooser<>();
-  private final SendableChooser<Double> m_resettingPattern = new SendableChooser<>();
+  private final SendableChooser<LEDPattern> m_manualPattern = new SendableChooser<>();
+  private final SendableChooser<LEDPattern> m_idlePattern = new SendableChooser<>();
+  private final SendableChooser<LEDPattern> m_crankingPattern = new SendableChooser<>();
+  private final SendableChooser<LEDPattern> m_poppedPattern = new SendableChooser<>();
+  private final SendableChooser<LEDPattern> m_resettingPattern = new SendableChooser<>();
 
   private State state = State.IDLE;
   private double stateStartTime = 0;
@@ -121,17 +130,22 @@ public class Robot extends TimedRobot {
         .outputRange(-1.0, 1.0);
     m_crank.configure(crankConfig, ResetMode.kResetSafeParameters, PersistMode.kPersistParameters);
 
+    // Start the LED strip
+    m_led.setLength(LED_LENGTH);
+    m_led.setData(m_ledBuffer);
+    m_led.start();
+
     // Mode: true = follow the prop state, false = manual override
     m_ledMode.setDefaultOption("Auto (follow state)", true);
     m_ledMode.addOption("Manual", false);
     SmartDashboard.putData("LED Mode", m_ledMode);
 
     // Pattern pickers (second argument is the pre-selected pattern)
-    setupPatternChooser(m_manualPattern, 0.91);        // Solid Violet
-    setupPatternChooser(m_idlePattern, -0.15);         // Breath Blue
-    setupPatternChooser(m_crankingPattern, 0.69);      // Solid Yellow
-    setupPatternChooser(m_poppedPattern, -0.99);       // Rainbow (Rainbow Palette)
-    setupPatternChooser(m_resettingPattern, 0.65);     // Solid Orange
+    setupPatternChooser(m_manualPattern, "Solid Violet");
+    setupPatternChooser(m_idlePattern, "Breath Blue");
+    setupPatternChooser(m_crankingPattern, "Solid Yellow");
+    setupPatternChooser(m_poppedPattern, "Rainbow");
+    setupPatternChooser(m_resettingPattern, "Solid Orange");
 
     SmartDashboard.putData("LED Manual Pattern", m_manualPattern);
     SmartDashboard.putData("LED Idle", m_idlePattern);
@@ -153,67 +167,46 @@ public class Robot extends TimedRobot {
     SmartDashboard.setDefaultNumber("Trigger Cooldown (s)", DEFAULT_COOLDOWN_SEC);
   }
 
-  /** Fills a chooser with the Blinkin patterns. defaultValue is the pre-selected one. */
-  private void setupPatternChooser(SendableChooser<Double> chooser, double defaultValue) {
+  /** Fills a chooser with LED patterns. defaultName is the pre-selected one. */
+  private void setupPatternChooser(SendableChooser<LEDPattern> chooser, String defaultName) {
     Object[][] patterns = {
       // Solid colors
-      {"Solid Hot Pink", 0.57},
-      {"Solid Dark Red", 0.59},
-      {"Solid Red", 0.61},
-      {"Solid Red Orange", 0.63},
-      {"Solid Orange", 0.65},
-      {"Solid Gold", 0.67},
-      {"Solid Yellow", 0.69},
-      {"Solid Lawn Green", 0.71},
-      {"Solid Lime", 0.73},
-      {"Solid Dark Green", 0.75},
-      {"Solid Green", 0.77},
-      {"Solid Blue Green", 0.79},
-      {"Solid Aqua", 0.81},
-      {"Solid Sky Blue", 0.83},
-      {"Solid Dark Blue", 0.85},
-      {"Solid Blue", 0.87},
-      {"Solid Blue Violet", 0.89},
-      {"Solid Violet", 0.91},
-      {"Solid White", 0.93},
-      {"Solid Gray", 0.95},
-      {"Solid Dark Gray", 0.97},
-      {"Off (Black)", 0.99},
+      {"Solid Hot Pink", LEDPattern.solid(Color.kHotPink)},
+      {"Solid Dark Red", LEDPattern.solid(Color.kDarkRed)},
+      {"Solid Red", LEDPattern.solid(Color.kRed)},
+      {"Solid Orange", LEDPattern.solid(Color.kOrange)},
+      {"Solid Gold", LEDPattern.solid(Color.kGold)},
+      {"Solid Yellow", LEDPattern.solid(Color.kYellow)},
+      {"Solid Lime", LEDPattern.solid(Color.kLime)},
+      {"Solid Green", LEDPattern.solid(Color.kGreen)},
+      {"Solid Aqua", LEDPattern.solid(Color.kAqua)},
+      {"Solid Blue", LEDPattern.solid(Color.kBlue)},
+      {"Solid Violet", LEDPattern.solid(Color.kViolet)},
+      {"Solid White", LEDPattern.solid(Color.kWhite)},
+      {"Off (Black)", LEDPattern.solid(Color.kBlack)},
 
-      // Breathing / heartbeat in fixed colors
-      {"Breath Red", -0.17},
-      {"Breath Blue", -0.15},
-      {"Breath Gray", -0.13},
-      {"Heartbeat Red", -0.25},
-      {"Heartbeat Blue", -0.23},
-      {"Heartbeat White", -0.21},
-      {"Heartbeat Gray", -0.19},
+      // Breathing
+      {"Breath Red", LEDPattern.solid(Color.kRed).breathe(Seconds.of(2))},
+      {"Breath Orange", LEDPattern.solid(Color.kOrange).breathe(Seconds.of(2))},
+      {"Breath Blue", LEDPattern.solid(Color.kBlue).breathe(Seconds.of(2))},
+      {"Breath Violet", LEDPattern.solid(Color.kViolet).breathe(Seconds.of(2))},
+      {"Breath White", LEDPattern.solid(Color.kWhite).breathe(Seconds.of(2))},
 
       // Strobes
-      {"Strobe Red", -0.11},
-      {"Strobe Blue", -0.09},
-      {"Strobe Gold", -0.07},
-      {"Strobe White", -0.05},
+      {"Strobe Red", LEDPattern.solid(Color.kRed).blink(Seconds.of(0.1))},
+      {"Strobe Orange", LEDPattern.solid(Color.kOrange).blink(Seconds.of(0.1))},
+      {"Strobe Blue", LEDPattern.solid(Color.kBlue).blink(Seconds.of(0.1))},
+      {"Strobe White", LEDPattern.solid(Color.kWhite).blink(Seconds.of(0.1))},
 
-      // Other effects
-      {"Fire (Medium)", -0.59},
-      {"Fire (Large)", -0.57},
-      {"Rainbow (Rainbow Palette)", -0.99},
-      {"Rainbow (Party Palette)", -0.97},
-      {"Rainbow (Ocean Palette)", -0.95},
-      {"Rainbow (Lava Palette)", -0.93},
-      {"Rainbow (Forest Palette)", -0.91},
-      {"Rainbow Glitter", -0.89},
-      {"Confetti", -0.87},
-      {"Shot Red", -0.85},
-      {"Shot Blue", -0.83},
-      {"Shot White", -0.81},
+      // Rainbows
+      {"Rainbow", LEDPattern.rainbow(255, 128).scrollAtRelativeSpeed(Percent.per(Second).of(50))},
+      {"Rainbow (Slow)", LEDPattern.rainbow(255, 128).scrollAtRelativeSpeed(Percent.per(Second).of(15))},
     };
 
     for (Object[] p : patterns) {
       String name = (String) p[0];
-      double value = (Double) p[1];
-      if (value == defaultValue) {
+      LEDPattern value = (LEDPattern) p[1];
+      if (name.equals(defaultName)) {
         chooser.setDefaultOption(name, value);
       } else {
         chooser.addOption(name, value);
@@ -247,10 +240,10 @@ public class Robot extends TimedRobot {
     stateStartTime = Timer.getFPGATimestamp();
   }
 
-  /** Decides which pattern the Blinkin should show right now. */
+  /** Decides which pattern the LED strip should show right now. */
   private void updateLeds() {
     boolean auto = m_ledMode.getSelected();
-    Double pattern;
+    LEDPattern pattern;
 
     if (!auto) {
       pattern = m_manualPattern.getSelected();
@@ -265,7 +258,9 @@ public class Robot extends TimedRobot {
     }
 
     if (pattern != null) {
-      m_leds.set(pattern);
+      // Animated patterns (breathe, strobe, rainbow) must be re-applied every loop
+      pattern.applyTo(m_ledBuffer);
+      m_led.setData(m_ledBuffer);
     }
   }
 
