@@ -51,13 +51,13 @@ public class Robot extends TimedRobot {
   private static final int PISTON_REVERSE_CHANNEL = 1; // PCM channel for the other side
   private static final int PIR_DIO_PORT = 0;
   private static final int LED_PWM_PORT = 0;       // roboRIO PWM port the strip's DI wire is plugged into
-  private static final int LED_LENGTH = 60;        // number of LEDs on the strip (CHANGE to match yours)
+  private static final int LED_LENGTH = 150;        // number of LEDs on the strip (CHANGE to match yours)
   private static final int CRANK_CURRENT_LIMIT_AMPS = 40;
 
   // Default timings (seconds). These can be changed live from Elastic.
   private static final double DEFAULT_CRANK_MIN_TIME_SEC = 1.0; // shortest possible crank time before the pop
   private static final double DEFAULT_CRANK_MAX_TIME_SEC = 5.0; // longest possible crank time before the pop
-  private static final double DEFAULT_CRANK_RPM = 60.0;         // crank speed in RPM (at the crank, after any gearing)
+  private static final double DEFAULT_CRANK_RPM = 60;         // crank speed in RPM (at the crank, after any gearing)
   private static final double CRANK_GEAR_RATIO = 1.0;           // motor rotations per crank rotation (e.g. 5.0 for a 5:1 reduction)
 
   // Velocity PID defaults. Units: output (-1..1) per motor RPM of error.
@@ -132,6 +132,7 @@ public class Robot extends TimedRobot {
 
     // Start the LED strip
     m_led.setLength(LED_LENGTH);
+    m_led.setColorOrder(AddressableLED.ColorOrder.kRGB);
     m_led.setData(m_ledBuffer);
     m_led.start();
 
